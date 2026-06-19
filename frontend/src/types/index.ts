@@ -61,6 +61,81 @@ export interface NodeDetail {
   subscriptions?: SubscriptionConfig[]
 }
 
+// 统一的设备阈值配置
+export interface DeviceThresholds {
+  minValue: number
+  maxValue: number
+  warningThreshold: number
+  criticalThreshold: number
+}
+
+// 全局设备配置映射
+export interface DeviceConfigMap {
+  [nodeId: string]: DeviceThresholds & { unit: string; label: string }
+}
+
+// 全局设备配置常量
+export const GLOBAL_DEVICE_CONFIG: DeviceConfigMap = {
+  temp_sensor: {
+    minValue: -10,
+    maxValue: 60,
+    warningThreshold: 28,
+    criticalThreshold: 35,
+    unit: '°C',
+    label: '温度传感器'
+  },
+  pressure_transmitter: {
+    minValue: 0,
+    maxValue: 10,
+    warningThreshold: 4.0,
+    criticalThreshold: 5.0,
+    unit: 'MPa',
+    label: '压力变送器'
+  },
+  flow_meter: {
+    minValue: 0,
+    maxValue: 500,
+    warningThreshold: 400,
+    criticalThreshold: 450,
+    unit: 'L/min',
+    label: '流量计'
+  },
+  valve_position: {
+    minValue: 0,
+    maxValue: 100,
+    warningThreshold: 95,
+    criticalThreshold: 100,
+    unit: '%',
+    label: '阀门开度'
+  },
+  motor_speed: {
+    minValue: 0,
+    maxValue: 2000,
+    warningThreshold: 1550,
+    criticalThreshold: 1700,
+    unit: 'RPM',
+    label: '电机转速'
+  }
+}
+
+// 数值夹取工具函数
+export function clampValue(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+// 根据数值和阈值获取状态等级
+export type ValueLevel = 'Normal' | 'Warning' | 'Critical' | 'OutOfRange'
+
+export function getValueLevel(
+  value: number,
+  thresholds: DeviceThresholds
+): ValueLevel {
+  if (value < thresholds.minValue || value > thresholds.maxValue) return 'OutOfRange'
+  if (value >= thresholds.criticalThreshold) return 'Critical'
+  if (value >= thresholds.warningThreshold) return 'Warning'
+  return 'Normal'
+}
+
 // 拓扑图设备类型
 export type TopologyDeviceType = 'Area' | 'ProductionLine' | 'Pump' | 'Valve' | 'Sensor'
 

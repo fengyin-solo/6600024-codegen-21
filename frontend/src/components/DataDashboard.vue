@@ -12,7 +12,7 @@
             <span class="gauge-unit">°C</span>
           </div>
           <el-progress
-            :percentage="Math.min((temperature / 50) * 100, 100)"
+            :percentage="safePercentage(temperature, GLOBAL_DEVICE_CONFIG.temp_sensor.maxValue)"
             :color="getTempColor(temperature)"
             :stroke-width="8"
           />
@@ -30,7 +30,7 @@
             <span class="gauge-unit">MPa</span>
           </div>
           <el-progress
-            :percentage="Math.min((pressure / 6) * 100, 100)"
+            :percentage="safePercentage(pressure, GLOBAL_DEVICE_CONFIG.pressure_transmitter.maxValue)"
             :color="getPressureColor(pressure)"
             :stroke-width="8"
           />
@@ -43,13 +43,13 @@
         <!-- 流量计 -->
         <div class="gauge-card">
           <div class="gauge-label">流量</div>
-          <div class="gauge-value text-blue-400">
+          <div class="gauge-value" :class="getFlowClass(flow)">
             {{ flow.toFixed(1) }}
             <span class="gauge-unit">L/min</span>
           </div>
           <el-progress
-            :percentage="Math.min((flow / 300) * 100, 100)"
-            color="#60a5fa"
+            :percentage="safePercentage(flow, GLOBAL_DEVICE_CONFIG.flow_meter.maxValue)"
+            :color="getFlowColor(flow)"
             :stroke-width="8"
           />
           <div class="gauge-quality">
@@ -61,13 +61,13 @@
         <!-- 阀门开度 -->
         <div class="gauge-card">
           <div class="gauge-label">阀门开度</div>
-          <div class="gauge-value text-purple-400">
+          <div class="gauge-value" :class="getValveClass(valvePosition)">
             {{ valvePosition.toFixed(0) }}
             <span class="gauge-unit">%</span>
           </div>
           <el-progress
-            :percentage="valvePosition"
-            color="#a78bfa"
+            :percentage="safePercentage(valvePosition, 100)"
+            :color="getValveColor(valvePosition)"
             :stroke-width="8"
           />
           <div class="gauge-quality">
@@ -84,7 +84,7 @@
             <span class="gauge-unit">RPM</span>
           </div>
           <el-progress
-            :percentage="Math.min((motorSpeed / 2000) * 100, 100)"
+            :percentage="safePercentage(motorSpeed, GLOBAL_DEVICE_CONFIG.motor_speed.maxValue)"
             :color="getSpeedColor(motorSpeed)"
             :stroke-width="8"
           />
@@ -138,17 +138,36 @@ import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, TitleComponent } from 'echarts/components'
 import { CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import { useOpcuaStore } from '../store/opcua'
+import { GLOBAL_DEVICE_CONFIG, clampValue, getValueLevel } from '../types'
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, TitleComponent])
 
 const store = useOpcuaStore()
 
-// 获取节点当前值
+// 获取节点当前值（进行数值夹取，确保在合法范围内）
 function getNodeValue(nodeId: string): number | boolean {
   const data = store.realTimeData.get(nodeId)
-  if (data) return data.value as number | boolean
-  const node = findNodeById(nodeId)
-  return node?.value ?? 0
+  let rawValue: number | boolean
+  if (data) {
+    rawValue = data.value as number | boolean
+  } else {
+    const node = findNodeById(nodeId)
+    rawValue = node?.value ?? 0
+  }
+  // 对数值进行夹取
+  if (typeof rawValue === 'number') {
+    const config = GLOBAL_DEVICE_CONFIG[nodeId]
+    if (config) {
+      rawValue = clampValue(rawValue, config.minValue, config.maxValue)
+    }
+  }
+  return rawValue
+}
+
+// 安全计算进度条百分比，始终返回 0-100 之间
+function safePercentage(value: number, maxValue: number): number {
+  if (maxValue <= 0) return 0
+  return clampValue((value / maxValue) * 100, 0, 100)
 }
 
 function getNodeQuality(nodeId: string): string {
@@ -185,41 +204,64 @@ const valvePosition = computed(() => getNodeValue('valve_position') as number ||
 const motorSpeed = computed(() => getNodeValue('motor_speed') as number || 1480)
 const pumpStatus = computed(() => getNodeValue('pump_status') as boolean)
 
-// 温度和颜色判断
-function getTempClass(val: number) {
-  if (val > 30) return 'text-red-400'
-  if (val > 28) return 'text-yellow-400'
+// 根据全局配置统一判断数值等级并返回对应的样式
+function getLevelClass(nodeId: string, val: number): string {
+  const config = GLOBAL_DEVICE_CONFIG[nodeId]
+  if (!config) return 'text-green-400'
+  const level = getValueLevel(val, config)
+  if (level === 'Critical' || level === 'OutOfRange') return 'text-red-400'
+  if (level === 'Warning') return 'text-yellow-400'
   return 'text-green-400'
 }
 
+function getLevelColor(nodeId: string, val: number, normalColor: string): string {
+  const config = GLOBAL_DEVICE_CONFIG[nodeId]
+  if (!config) return normalColor
+  const level = getValueLevel(val, config)
+  if (level === 'Critical' || level === 'OutOfRange') return '#f56c6c'
+  if (level === 'Warning') return '#e6a23c'
+  return normalColor
+}
+
+// 温度和颜色判断（统一使用全局配置）
+function getTempClass(val: number) {
+  return getLevelClass('temp_sensor', val)
+}
+
 function getTempColor(val: number) {
-  if (val > 30) return '#f56c6c'
-  if (val > 28) return '#e6a23c'
-  return '#67c23a'
+  return getLevelColor('temp_sensor', val, '#67c23a')
 }
 
 function getPressureClass(val: number) {
-  if (val > 4.5) return 'text-red-400'
-  if (val > 4.0) return 'text-yellow-400'
-  return 'text-cyan-400'
+  return getLevelClass('pressure_transmitter', val).replace('text-green-400', 'text-cyan-400')
 }
 
 function getPressureColor(val: number) {
-  if (val > 4.5) return '#f56c6c'
-  if (val > 4.0) return '#e6a23c'
-  return '#06b6d4'
+  return getLevelColor('pressure_transmitter', val, '#06b6d4')
+}
+
+function getFlowClass(val: number) {
+  return getLevelClass('flow_meter', val).replace('text-green-400', 'text-blue-400')
+}
+
+function getFlowColor(val: number) {
+  return getLevelColor('flow_meter', val, '#60a5fa')
+}
+
+function getValveClass(val: number) {
+  return getLevelClass('valve_position', val).replace('text-green-400', 'text-purple-400')
+}
+
+function getValveColor(val: number) {
+  return getLevelColor('valve_position', val, '#a78bfa')
 }
 
 function getSpeedClass(val: number) {
-  if (val > 1600) return 'text-red-400'
-  if (val > 1550) return 'text-yellow-400'
-  return 'text-emerald-400'
+  return getLevelClass('motor_speed', val).replace('text-green-400', 'text-emerald-400')
 }
 
 function getSpeedColor(val: number) {
-  if (val > 1600) return '#f56c6c'
-  if (val > 1550) return '#e6a23c'
-  return '#34d399'
+  return getLevelColor('motor_speed', val, '#34d399')
 }
 
 // 构建趋势图

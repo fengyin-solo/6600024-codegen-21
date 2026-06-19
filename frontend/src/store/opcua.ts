@@ -12,6 +12,7 @@ import type {
   ValveDevice,
   DeviceStatus
 } from '../types'
+import { GLOBAL_DEVICE_CONFIG, clampValue, getValueLevel } from '../types'
 
 export const useOpcuaStore = defineStore('opcua', () => {
   // 状态
@@ -136,26 +137,51 @@ export const useOpcuaStore = defineStore('opcua', () => {
     const nodes = getAllVariableNodes()
     nodes.forEach(node => {
       const currentValue = realTimeData.value.get(node.id)?.value ?? node.value
-      
+
       let newValue: number | boolean | string
       if (node.dataType === 'Double') {
         const numVal = typeof currentValue === 'number' ? currentValue : parseFloat(String(currentValue))
         const variation = (Math.random() - 0.5) * 2
-        newValue = Math.round((numVal + variation) * 100) / 100
+        let rawValue = Math.round((numVal + variation) * 100) / 100
+        // 使用全局配置进行数值夹取，确保在合法范围内
+        const config = GLOBAL_DEVICE_CONFIG[node.id]
+        if (config) {
+          rawValue = clampValue(rawValue, config.minValue, config.maxValue)
+        }
+        newValue = rawValue
       } else if (node.dataType === 'Int32') {
         const numVal = typeof currentValue === 'number' ? currentValue : parseInt(String(currentValue))
         const variation = Math.floor((Math.random() - 0.5) * 10)
-        newValue = numVal + variation
+        let rawValue = numVal + variation
+        // 使用全局配置进行数值夹取，确保在合法范围内
+        const config = GLOBAL_DEVICE_CONFIG[node.id]
+        if (config) {
+          rawValue = Math.round(clampValue(rawValue, config.minValue, config.maxValue))
+        }
+        newValue = rawValue
       } else if (node.dataType === 'Boolean') {
         newValue = Math.random() > 0.95 ? !currentValue : currentValue
       } else {
         newValue = currentValue
       }
 
+      // 根据数值和全局配置确定数据质量
+      let quality: 'Good' | 'Bad' | 'Uncertain' = 'Good'
+      if (typeof newValue === 'number') {
+        const config = GLOBAL_DEVICE_CONFIG[node.id]
+        if (config) {
+          const level = getValueLevel(newValue, config)
+          if (level === 'Critical') quality = 'Uncertain'
+          if (Math.random() > 0.98) quality = 'Uncertain'
+        }
+      } else if (Math.random() > 0.98) {
+        quality = 'Uncertain'
+      }
+
       const dataValue: DataValue = {
         nodeId: node.nodeId,
         value: newValue,
-        quality: Math.random() > 0.98 ? 'Uncertain' : 'Good',
+        quality,
         timestamp: Date.now(),
         sourceTimestamp: Date.now(),
         serverTimestamp: Date.now()
@@ -179,36 +205,29 @@ export const useOpcuaStore = defineStore('opcua', () => {
     updateTopologyStatus()
   }
 
-  // 检查报警
+  // 检查报警（使用全局配置统一阈值）
   function checkAlarms(node: OPCUANode, value: number | boolean | string) {
-    if (node.id === 'temp_sensor' && typeof value === 'number' && value > 28) {
-      addAlarm({
-        nodeId: node.nodeId,
-        nodeName: node.name,
-        severity: 'High',
-        message: `温度过高: ${value}°C (阈值: 28°C)`,
-        value,
-        threshold: 28
-      })
-    }
-    if (node.id === 'pressure_transmitter' && typeof value === 'number' && value > 4.0) {
-      addAlarm({
-        nodeId: node.nodeId,
-        nodeName: node.name,
-        severity: 'Critical',
-        message: `压力超限: ${value} MPa (阈值: 4.0 MPa)`,
-        value,
-        threshold: 4.0
-      })
-    }
-    if (node.id === 'motor_speed' && typeof value === 'number' && value > 1550) {
+    const config = GLOBAL_DEVICE_CONFIG[node.id]
+    if (!config || typeof value !== 'number') return
+
+    const level = getValueLevel(value, config)
+    if (level === 'Warning') {
       addAlarm({
         nodeId: node.nodeId,
         nodeName: node.name,
         severity: 'Medium',
-        message: `电机转速偏高: ${value} RPM (阈值: 1550 RPM)`,
+        message: `${config.label}警告: ${value}${config.unit} (阈值: ${config.warningThreshold}${config.unit})`,
         value,
-        threshold: 1550
+        threshold: config.warningThreshold
+      })
+    } else if (level === 'Critical') {
+      addAlarm({
+        nodeId: node.nodeId,
+        nodeName: node.name,
+        severity: 'Critical',
+        message: `${config.label}超限: ${value}${config.unit} (阈值: ${config.criticalThreshold}${config.unit})`,
+        value,
+        threshold: config.criticalThreshold
       })
     }
   }
@@ -437,18 +456,20 @@ export const useOpcuaStore = defineStore('opcua', () => {
     }
   }
 
-  // 根据数值和阈值计算设备状态
+  // 根据数值和阈值计算设备状态（使用全局配置保持一致性）
   function calculateDeviceStatus(
-    value: number,
-    warningThreshold?: number,
-    criticalThreshold?: number
+    nodeId: string,
+    value: number
   ): DeviceStatus {
-    if (criticalThreshold !== undefined && value >= criticalThreshold) return 'Error'
-    if (warningThreshold !== undefined && value >= warningThreshold) return 'Warning'
+    const config = GLOBAL_DEVICE_CONFIG[nodeId]
+    if (!config) return 'Running'
+    const level = getValueLevel(value, config)
+    if (level === 'Critical' || level === 'OutOfRange') return 'Error'
+    if (level === 'Warning') return 'Warning'
     return 'Running'
   }
 
-  // 更新拓扑图设备实时状态
+  // 更新拓扑图设备实时状态（对数值进行夹取，确保在合法范围内）
   function updateTopologyStatus() {
     topologyData.value.nodes.forEach(node => {
       const anyNode = node as any
@@ -456,12 +477,17 @@ export const useOpcuaStore = defineStore('opcua', () => {
         const sensor = node as SensorDevice & { linkedNodeId?: string }
         const opcData = sensor.linkedNodeId ? realTimeData.value.get(sensor.linkedNodeId) : undefined
         if (opcData && typeof opcData.value === 'number') {
-          sensor.value = opcData.value
-          sensor.status = calculateDeviceStatus(
-            opcData.value,
-            sensor.warningThreshold,
-            sensor.criticalThreshold
-          )
+          // 数值夹取到合法范围
+          const config = GLOBAL_DEVICE_CONFIG[sensor.linkedNodeId!]
+          let clampedValue = opcData.value
+          if (config) {
+            clampedValue = clampValue(opcData.value, config.minValue, config.maxValue)
+          }
+          sensor.value = clampedValue
+          // 使用全局配置统一计算状态
+          if (sensor.linkedNodeId) {
+            sensor.status = calculateDeviceStatus(sensor.linkedNodeId, clampedValue)
+          }
           if (opcData.quality !== 'Good') {
             sensor.status = opcData.quality === 'Bad' ? 'Error' : 'Warning'
           }
@@ -474,9 +500,20 @@ export const useOpcuaStore = defineStore('opcua', () => {
             pump.isRunning = opcData.value
             pump.status = opcData.value ? 'Running' : 'Stopped'
           } else if (typeof opcData.value === 'number') {
-            pump.speed = opcData.value
-            pump.isRunning = opcData.value > 0
-            pump.status = opcData.value > 0 ? 'Running' : 'Stopped'
+            // 数值夹取到合法范围
+            const config = GLOBAL_DEVICE_CONFIG[pump.linkedNodeId!]
+            let clampedSpeed = opcData.value
+            if (config) {
+              clampedSpeed = Math.round(clampValue(opcData.value, config.minValue, config.maxValue))
+            }
+            pump.speed = clampedSpeed
+            pump.isRunning = clampedSpeed > 0
+            // 使用全局配置统一计算状态
+            if (pump.linkedNodeId && config) {
+              pump.status = calculateDeviceStatus(pump.linkedNodeId, clampedSpeed)
+            } else {
+              pump.status = clampedSpeed > 0 ? 'Running' : 'Stopped'
+            }
           }
           if (opcData.quality === 'Bad') pump.status = 'Error'
           else if (opcData.quality === 'Uncertain') pump.status = 'Warning'
@@ -485,10 +522,17 @@ export const useOpcuaStore = defineStore('opcua', () => {
         const valve = node as (ValveDevice & { linkedNodeId?: string; value: number })
         const opcData = valve.linkedNodeId ? realTimeData.value.get(valve.linkedNodeId) : undefined
         if (opcData && typeof opcData.value === 'number') {
-          valve.value = opcData.value
-          valve.position = opcData.value
-          valve.isOpen = opcData.value > 0
-          valve.status = opcData.value > 0 ? 'Running' : 'Stopped'
+          // 阀门开度严格夹取在 0-100 之间，防止进度条越界
+          const clampedValue = clampValue(opcData.value, 0, 100)
+          valve.value = clampedValue
+          valve.position = clampedValue
+          valve.isOpen = clampedValue > 0
+          // 使用全局配置统一计算状态
+          if (valve.linkedNodeId) {
+            valve.status = calculateDeviceStatus(valve.linkedNodeId, clampedValue)
+          } else {
+            valve.status = clampedValue > 0 ? 'Running' : 'Stopped'
+          }
           if (opcData.quality === 'Bad') valve.status = 'Error'
           else if (opcData.quality === 'Uncertain') valve.status = 'Warning'
         }

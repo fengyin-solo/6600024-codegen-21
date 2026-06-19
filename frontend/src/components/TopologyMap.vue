@@ -75,14 +75,14 @@
             </el-descriptions-item>
             <el-descriptions-item label="当前值">
               <span class="text-green-400 font-mono text-lg">
-                {{ (selectedDevice as any).value?.toFixed(2) }} {{ (selectedDevice as any).unit }}
+                {{ getSafeDeviceValue(selectedDevice, 'value').toFixed(2) }} {{ (selectedDevice as any).unit }}
               </span>
             </el-descriptions-item>
-            <el-descriptions-item v-if="(selectedDevice as any).warningThreshold !== undefined" label="警告阈值">
-              {{ (selectedDevice as any).warningThreshold }} {{ (selectedDevice as any).unit }}
+            <el-descriptions-item v-if="getDeviceThresholds(selectedDevice).warningThreshold !== undefined" label="警告阈值">
+              {{ getDeviceThresholds(selectedDevice).warningThreshold }} {{ (selectedDevice as any).unit }}
             </el-descriptions-item>
-            <el-descriptions-item v-if="(selectedDevice as any).criticalThreshold !== undefined" label="危险阈值">
-              {{ (selectedDevice as any).criticalThreshold }} {{ (selectedDevice as any).unit }}
+            <el-descriptions-item v-if="getDeviceThresholds(selectedDevice).criticalThreshold !== undefined" label="危险阈值">
+              {{ getDeviceThresholds(selectedDevice).criticalThreshold }} {{ (selectedDevice as any).unit }}
             </el-descriptions-item>
           </template>
           <template v-if="selectedDevice.type === 'Pump'">
@@ -90,7 +90,7 @@
               {{ (selectedDevice as any).isRunning ? '运行中' : '已停止' }}
             </el-descriptions-item>
             <el-descriptions-item label="转速">
-              <span class="text-cyan-400 font-mono">{{ (selectedDevice as any).speed }} {{ (selectedDevice as any).unit }}</span>
+              <span class="text-cyan-400 font-mono">{{ getSafeDeviceValue(selectedDevice, 'speed') }} {{ (selectedDevice as any).unit }}</span>
             </el-descriptions-item>
             <el-descriptions-item v-if="(selectedDevice as any).flowRate !== undefined" label="流量">
               {{ (selectedDevice as any).flowRate?.toFixed(1) }} L/min
@@ -104,10 +104,10 @@
               {{ (selectedDevice as any).isOpen ? '开启' : '关闭' }}
             </el-descriptions-item>
             <el-descriptions-item label="开度">
-              <span class="text-purple-400 font-mono">{{ (selectedDevice as any).value }} {{ (selectedDevice as any).unit }}</span>
+              <span class="text-purple-400 font-mono">{{ getSafeDeviceValue(selectedDevice, 'value') }} {{ (selectedDevice as any).unit }}</span>
             </el-descriptions-item>
             <el-descriptions-item v-if="(selectedDevice as any).targetPosition !== undefined" label="目标开度">
-              {{ (selectedDevice as any).targetPosition }} {{ (selectedDevice as any).unit }}
+              {{ clampValue((selectedDevice as any).targetPosition || 0, 0, 100) }} {{ (selectedDevice as any).unit }}
             </el-descriptions-item>
           </template>
         </el-descriptions>
@@ -149,6 +149,7 @@ import type {
   DeviceStatus,
   SensorType
 } from '../types'
+import { GLOBAL_DEVICE_CONFIG, clampValue } from '../types'
 
 use([
   CanvasRenderer,
@@ -214,19 +215,65 @@ function getSensorTypeLabel(type: SensorType): string {
 }
 
 function getDeviceValueLabel(node: TopologyDevice): string {
+  const anyNode = node as any
+  const linkedNodeId: string | undefined = anyNode.linkedNodeId
   if (node.type === 'Sensor') {
-    const s = node as any
-    return `${s.value?.toFixed(1)} ${s.unit}`
+    const s = anyNode
+    // 使用全局配置进行数值夹取保护
+    let displayValue = typeof s.value === 'number' ? s.value : 0
+    if (linkedNodeId && GLOBAL_DEVICE_CONFIG[linkedNodeId]) {
+      const config = GLOBAL_DEVICE_CONFIG[linkedNodeId]
+      displayValue = clampValue(displayValue, config.minValue, config.maxValue)
+    }
+    return `${displayValue.toFixed(1)} ${s.unit}`
   }
   if (node.type === 'Pump') {
-    const p = node as any
-    return p.isRunning ? `${p.speed} ${p.unit}` : '已停止'
+    const p = anyNode
+    if (!p.isRunning) return '已停止'
+    let displaySpeed = typeof p.speed === 'number' ? p.speed : 0
+    if (linkedNodeId && GLOBAL_DEVICE_CONFIG[linkedNodeId]) {
+      const config = GLOBAL_DEVICE_CONFIG[linkedNodeId]
+      displaySpeed = Math.round(clampValue(displaySpeed, config.minValue, config.maxValue))
+    }
+    return `${displaySpeed} ${p.unit}`
   }
   if (node.type === 'Valve') {
-    const v = node as any
-    return `${v.value} ${v.unit}`
+    const v = anyNode
+    // 阀门开度严格夹取在 0-100
+    let displayValue = typeof v.value === 'number' ? v.value : 0
+    displayValue = clampValue(displayValue, 0, 100)
+    return `${Math.round(displayValue)} ${v.unit}`
   }
   return ''
+}
+
+// 安全获取设备数值（用于详情弹窗展示）
+function getSafeDeviceValue(node: TopologyDevice, field: 'value' | 'speed'): number {
+  const anyNode = node as any
+  const linkedNodeId: string | undefined = anyNode.linkedNodeId
+  const rawValue = typeof anyNode[field] === 'number' ? anyNode[field] : 0
+  if (node.type === 'Valve') {
+    return clampValue(rawValue, 0, 100)
+  }
+  if (linkedNodeId && GLOBAL_DEVICE_CONFIG[linkedNodeId]) {
+    const config = GLOBAL_DEVICE_CONFIG[linkedNodeId]
+    return clampValue(rawValue, config.minValue, config.maxValue)
+  }
+  return rawValue
+}
+
+// 获取统一的阈值配置（用于详情弹窗展示）
+function getDeviceThresholds(node: TopologyDevice) {
+  const anyNode = node as any
+  const linkedNodeId: string | undefined = anyNode.linkedNodeId
+  if (linkedNodeId && GLOBAL_DEVICE_CONFIG[linkedNodeId]) {
+    return GLOBAL_DEVICE_CONFIG[linkedNodeId]
+  }
+  // 回退到设备自身配置
+  return {
+    warningThreshold: anyNode.warningThreshold,
+    criticalThreshold: anyNode.criticalThreshold
+  }
 }
 
 function getNodeSymbolSize(node: TopologyDevice): number {
