@@ -60,3 +60,80 @@ export interface NodeDetail {
   history?: HistoryDataPoint[]
   subscriptions?: SubscriptionConfig[]
 }
+
+// 拓扑图设备类型
+export type TopologyDeviceType = 'Area' | 'ProductionLine' | 'Pump' | 'Valve' | 'Sensor'
+
+// 拓扑图设备状态
+export type DeviceStatus = 'Running' | 'Stopped' | 'Warning' | 'Error' | 'Offline'
+
+// 传感器类型
+export type SensorType = 'Temperature' | 'Pressure' | 'Flow' | 'Level'
+
+// 拓扑图设备基础接口
+export interface TopologyDevice {
+  id: string
+  name: string
+  type: TopologyDeviceType
+  status: DeviceStatus
+  nodeId?: string
+  description?: string
+  position?: { x: number; y: number }
+  parentId?: string
+}
+
+// 传感器设备
+export interface SensorDevice extends TopologyDevice {
+  type: 'Sensor'
+  sensorType: SensorType
+  value: number
+  unit: string
+  minValue?: number
+  maxValue?: number
+  warningThreshold?: number
+  criticalThreshold?: number
+}
+
+// 泵设备
+export interface PumpDevice extends TopologyDevice {
+  type: 'Pump'
+  isRunning: boolean
+  speed: number
+  unit: string
+  flowRate?: number
+  pressure?: number
+}
+
+// 阀门设备
+export interface ValveDevice extends TopologyDevice {
+  type: 'Valve'
+  position: number
+  unit: string
+  isOpen: boolean
+  targetPosition?: number
+}
+
+// 生产区域
+export interface ProductionArea extends TopologyDevice {
+  type: 'Area'
+}
+
+// 生产线
+export interface ProductionLine extends TopologyDevice {
+  type: 'ProductionLine'
+}
+
+// 拓扑图连接关系
+export interface TopologyLink {
+  id: string
+  source: string
+  target: string
+  label?: string
+  status?: 'Active' | 'Inactive' | 'Warning'
+}
+
+// 拓扑图数据
+export interface TopologyData {
+  nodes: TopologyDevice[]
+  links: TopologyLink[]
+}

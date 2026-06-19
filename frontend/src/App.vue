@@ -35,9 +35,28 @@
         <NodeTree />
       </aside>
 
-      <!-- 中央区域: 仪表盘 -->
+      <!-- 中央区域: 仪表盘 + 拓扑图 -->
       <main class="center-panel">
-        <DataDashboard />
+        <el-tabs v-model="activeTab" class="main-tabs" stretch>
+          <el-tab-pane label="数据仪表盘" name="dashboard">
+            <template #label>
+              <span class="tab-label">
+                <el-icon><DataAnalysis /></el-icon>
+                数据仪表盘
+              </span>
+            </template>
+            <DataDashboard />
+          </el-tab-pane>
+          <el-tab-pane label="生产区域拓扑图" name="topology">
+            <template #label>
+              <span class="tab-label">
+                <el-icon><Share /></el-icon>
+                生产区域拓扑图
+              </span>
+            </template>
+            <TopologyMap />
+          </el-tab-pane>
+        </el-tabs>
       </main>
 
       <!-- 右侧面板: 报警列表 -->
@@ -105,15 +124,17 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { Monitor, Bell, CircleCheck, CircleClose } from '@element-plus/icons-vue'
+import { Monitor, Bell, CircleCheck, CircleClose, DataAnalysis, Share } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useOpcuaStore } from './store/opcua'
 import NodeTree from './components/NodeTree.vue'
 import DataDashboard from './components/DataDashboard.vue'
+import TopologyMap from './components/TopologyMap.vue'
 import type { AlarmEvent } from './types'
 
 const store = useOpcuaStore()
 const updateTimer = ref<number | null>(null)
+const activeTab = ref('dashboard')
 
 const criticalCount = computed(() =>
   store.alarms.filter(a => a.severity === 'Critical' && !a.acknowledged).length
@@ -238,8 +259,60 @@ onUnmounted(() => {
 
 .center-panel {
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden;
   background: #0f172a;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-tabs {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.main-tabs :deep(.el-tabs__header) {
+  margin: 0;
+  background: rgba(30, 41, 59, 0.6);
+  border-bottom: 1px solid rgba(71, 85, 105, 0.5);
+  padding: 0 12px;
+}
+
+.main-tabs :deep(.el-tabs__nav-wrap::after) {
+  background-color: rgba(71, 85, 105, 0.5);
+}
+
+.main-tabs :deep(.el-tabs__item) {
+  color: #94a3b8;
+  height: 44px;
+  line-height: 44px;
+}
+
+.main-tabs :deep(.el-tabs__item.is-active) {
+  color: #22d3ee;
+}
+
+.main-tabs :deep(.el-tabs__active-bar) {
+  background-color: #06b6d4;
+}
+
+.main-tabs :deep(.el-tabs__content) {
+  flex: 1;
+  overflow: hidden;
+}
+
+.main-tabs :deep(.el-tab-pane) {
+  height: 100%;
+  overflow: hidden;
+}
+
+.tab-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .right-panel {
